@@ -93,13 +93,13 @@ library(recommenderlab)
 algorithms <- list("Random" = list(name = "RANDOM", param = NULL),
                    "Popular" = list(name = "POPULAR", param = NULL),
                    "User-based CF" = list(name = "UBCF", param = NULL),
-                   "Item-based CF" = list(name = "RANDOM", param = NULL),
+                   "Item-based CF" = list(name = "IBCF", param = NULL),
                    "PCA" = list(name = "PCA", param = NULL),
                    "SVD" = list(name = "SVD", param = NULL))
 
 # Run the above algorithms with cross-validation
 r <- as(reviews_to_consider, "realRatingMatrix")
-scheme <- evaluationScheme(r, method = "cross", given = 3)
+scheme <- evaluationScheme(r, method = "cross", given = 3, goodRating = 4)
 results <- evaluate(scheme, algorithms, n = c(5, 10, 15))
 
 ```
