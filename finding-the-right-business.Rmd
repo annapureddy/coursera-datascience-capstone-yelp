@@ -1,0 +1,99 @@
+---
+title: "Finding the right business, for you!"
+author: "Sid Reddy"
+date: "November 8, 2015"
+output: html_document
+---
+
+## Introduction
+
+This paper analyzes the Yelp academic dataset to present the best recommendations to a given user, for a given category and city. Users choose businesses based on their preferences, and simple algorithms like choosing businesses based on star ratings do not take such preferences into consideration. This paper details algorithms that can "personalize" the recommendations to a given user.  
+
+## Exploratory data analysis
+In this section, we will load the data, and present some initial analysis. We use the stream_in function from the jsonlite package to speed up the loading of large datasets like reviews. 
+
+```{r cache=TRUE, warning=FALSE}
+library(jsonlite)
+dataPath <- "yelp_dataset_challenge_academic_dataset"
+
+# Read business file
+dfb <- stream_in(file(paste(dataPath, "yelp_academic_dataset_business.json", sep = '/')), verbose = FALSE)
+
+# Read users file
+dfu <- stream_in(file(paste(dataPath, "yelp_academic_dataset_user.json", sep = '/')), verbose = FALSE)
+
+# Read review file
+dfr <- stream_in(file(paste(dataPath, "yelp_academic_dataset_review.json", sep = '/')), verbose = FALSE)
+
+# Read tip file 
+dft <- stream_in(file(paste(dataPath, "yelp_academic_dataset_tip.json", sep = '/')), verbose = FALSE)
+```
+
+We will make a simplifying assumption that people will search only at the city level for categories (the "right" approach would be to use latitude and longitude, along with a radius for our search; however, this does not impact our algorithms significantly, hence the simplifying choice). We now examine the data to understand if personalized recommendations are feasible. The output below suggests that the unique (category, city) combinations are only 8% (14580 / 176697 = `r 14580 / 176697`) of the total available combinations, suggesting that multiple choices for a (category, city) exist, and that it is possible to order them for a given user.
+
+```{r cache=TRUE, warning=FALSE}
+# Summary
+dfs <- c()
+dfs["Number of users"] <- nrow(dfu)
+dfs["Number of businesses"] <- nrow(dfb)
+
+# Number of (category, city) combinations
+df1 <- mapply(function(x, y) expand.grid(unlist(x), y, stringsAsFactors = FALSE),  dfb[, 'categories'], dfb[, 'city'], SIMPLIFY = FALSE)
+library(data.table)
+df2 <- rbindlist(df1)
+dfs["Number of (category, city) combinations"] <- nrow(df2)
+df3 <- unique(df2)
+dfs["Number of unique (category, city) combinations"] <- nrow(df3)
+
+# Tidy display
+as.data.frame(dfs)
+```
+
+We will now construct a simple collaborative filtering model to provide personalized recommendations for users. This will be based on item-item recommendations. Here are the steps involved:
+1. Each user rates a business with a single number. 
+2. We then find the similarity of one business with every other business (using these user ratings). 
+3. When a user now enters a category and a city, we select the businesses that match those criteria. 
+4. For each of these businesses, we compute a score based on the user's ranking of similar businesses (similar businesses are obtained in step 2).
+
+We will build a very simple model to begin with: user's star rating for a business is used as the single number. 
+
+```{r cache=TRUE, warning=FALSE}
+# Restrict analysis to a small dataset (R has issues handling large number of rows; for example, dcast in reshape2 barfs even for 100K rows)
+
+# Focus only on stars as the basis for recommendations 
+reviews <- dfr[, c('user_id', 'business_id', 'stars')] 
+
+# Find businesses that got reviews, and look up their records
+business_ids_reviewed <- unique(reviews[ , 'business_id'])
+businesses_reviewed <- dfb[match(business_ids_reviewed, dfb[ , 'business_id']), ]
+# Find cities these businesses are located in
+cities_with_businesses_reviewed <- unique(businesses_reviewed[, 'city'])
+# Only consider those businesses that are in the first 'x' cities (x = 1 here)
+cities_to_consider <- cities_with_businesses_reviewed[1]
+# Now consider only businesses (that we already know have reviews)  that are in such cities
+businesses_to_consider <- businesses_reviewed[which(businesses_reviewed[, 'city'] %in% cities_to_consider), ]
+
+# Limit businesses to the restaurants category
+restaurants_to_consider <- businesses_to_consider[which(sapply(businesses_to_consider$categories, function(x) "Restaurants" %in% x)), ]
+# Consider only such reviews (about 140K rows)
+reviews_to_consider <- reviews[which(reviews[, 'business_id'] %in% restaurants_to_consider[ , 'business_id']), ]
+
+# Limit users to those who have written reviews
+users <- unique(reviews_to_consider[, 'user_id'])
+# Consider only the top 'x' users, so that number of reviews is at most 10000
+library(dplyr)
+users_to_consider <- reviews_to_consider %>% group_by(user_id) %>% summarize(count = n()) %>% arrange(desc(count)) %>% mutate(total_count = cumsum(count)) %>% filter(total_count < 100000) %>% select(user_id)
+
+# Finalize dataset for consideration
+reviews_to_consider <- reviews_to_consider[which(reviews_to_consider[, 'user_id'] %in% users_to_consider[, 'user_id']), ]
+
+# Prepare the data for building recommendation models, by obtaining a user-item matrix (item here is business)
+library(reshape2)
+user_business_matrix <- dcast(reviews_to_consider, user_id ~ business_id, fun.aggregate = mean)
+```
+
+```{r cache=TRUE, warning=FALSE}
+library(recommenderlab)
+
+
+```
