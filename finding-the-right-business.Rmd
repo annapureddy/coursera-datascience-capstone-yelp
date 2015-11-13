@@ -82,18 +82,24 @@ reviews_to_consider <- reviews[which(reviews[, 'business_id'] %in% restaurants_t
 users <- unique(reviews_to_consider[, 'user_id'])
 # Consider only the top 'x' users, so that number of reviews is at most 10000
 library(dplyr)
-users_to_consider <- reviews_to_consider %>% group_by(user_id) %>% summarize(count = n()) %>% arrange(desc(count)) %>% mutate(total_count = cumsum(count)) %>% filter(total_count < 100000) %>% select(user_id)
+users_to_consider <- reviews_to_consider %>% group_by(user_id, business_id) %>% summarize(count1 = n()) %>% group_by(user_id) %>% summarize(count = n()) %>% arrange(desc(count)) %>% filter(count >= 3) %>% mutate(total_count = cumsum(count)) %>% filter(total_count < 100000) %>% select(user_id)
 
 # Finalize dataset for consideration
 reviews_to_consider <- reviews_to_consider[which(reviews_to_consider[, 'user_id'] %in% users_to_consider[, 'user_id']), ]
-
-# Prepare the data for building recommendation models, by obtaining a user-item matrix (item here is business)
-library(reshape2)
-user_business_matrix <- dcast(reviews_to_consider, user_id ~ business_id, fun.aggregate = mean)
 ```
 
 ```{r cache=TRUE, warning=FALSE}
 library(recommenderlab)
+algorithms <- list("Random" = list(name = "RANDOM", param = NULL),
+                   "Popular" = list(name = "POPULAR", param = NULL),
+                   "User-based CF" = list(name = "UBCF", param = NULL),
+                   "Item-based CF" = list(name = "RANDOM", param = NULL),
+                   "PCA" = list(name = "PCA", param = NULL),
+                   "SVD" = list(name = "SVD", param = NULL))
 
+# Run the above algorithms with cross-validation
+r <- as(reviews_to_consider, "realRatingMatrix")
+scheme <- evaluationScheme(r, method = "cross", given = 3)
+results <- evaluate(scheme, algorithms, n = c(5, 10, 15))
 
 ```
