@@ -20,6 +20,9 @@ How can we do better?
     - We only use star ratings in our analysis
 - Several algorithms 
     - User-Based Collaborative Filtering (UBCF)
+        - Leverage users similar to a given user
+        - Generate list of "similar" users (50 in our case)
+        - Business ranked using rating of similar users 
     - Item-Based Collaborative Filtering (IBCF)
     - Singular Value Decomposition (SVD)
 - UBCF performs the best!
@@ -39,7 +42,14 @@ How does UBCF work?
     
 Evaluation
 ========================================================
-```{r cache=TRUE, warning=FALSE, echo=FALSE, results='hide'}
+- Evaluation setup considerations (due to data size)
+    - Restaurants category only
+    - First 10 cities only
+    - Users who gave at least 20 ratings
+    - 4-fold cross validation done for all algorithms
+- UBCF performs the best predictions!
+
+```{r read_data, cache=TRUE, warning=FALSE, echo=FALSE, results='hide'}
 library(jsonlite, quietly = TRUE)
 dataPath <- "yelp_dataset_challenge_academic_dataset"
 
@@ -51,7 +61,104 @@ dfu <- stream_in(file(paste(dataPath, "yelp_academic_dataset_user.json", sep = '
 
 # Read review file
 dfr <- stream_in(file(paste(dataPath, "yelp_academic_dataset_review.json", sep = '/')), verbose = FALSE)
+```
 
+```{r processing_functions, cache=TRUE, warning=FALSE, echo=FALSE, results='hide', dependson="read_data"}
+# Restrict analysis to a small dataset (R has issues handling large number of rows; for example, dcast in reshape2 barfs even for 100K rows)
 
+# Return businesses that fall in the first num_cities 
+restrict_cities <- function(num_cities) {
+    # Find businesses that got reviews, and look up their records
+    business_ids_reviewed <- unique(dfr[ , 'business_id'])
+    businesses_reviewed <- dfb[match(business_ids_reviewed, dfb[ , 'business_id']), ]
+    # Find cities these businesses are located in
+    cities_with_businesses_reviewed <- unique(businesses_reviewed[, 'city'])
+    # Only consider those businesses that are in the first 'x' cities (x = 1 here)
+    cities_to_consider <- cities_with_businesses_reviewed[1:num_cities]
+    # Now consider only businesses (that we already know have reviews)  that are in such cities
+    businesses_to_consider <- businesses_reviewed[which(businesses_reviewed[, 'city'] %in% cities_to_consider), ]
+    
+    businesses_to_consider
+}
+
+# Return businesses that fall in the categories
+restrict_categories <- function(categories) {
+      # Limit businesses to the restaurants category
+    businesses_to_consider <- dfb[which(sapply(dfb$categories, function(x) categories %in% x)), ]
+    
+    businesses_to_consider
+}
+
+# Return users that have at least min_user_reviews number of reviews
+restrict_users <- function(reviews_to_consider, min_user_reviews, max_reviews) {
+    library(dplyr)
+    
+    # Limit users to those who have written reviews
+    # users_to_consider <- reviews_to_consider %>% group_by(user_id, business_id) %>% summarize(count1 = n()) %>% group_by(user_id) %>% summarize(count = n()) %>% arrange(desc(count)) %>% filter(count >= min_user_reviews) %>% mutate(total_count = cumsum(count)) %>% filter(total_count < 100000) %>% select(user_id)
+    users_to_consider <- reviews_to_consider %>% 
+        group_by(user_id, business_id) %>% summarize(count1 = n()) %>%
+        group_by(user_id) %>% summarize(count = n()) %>% 
+        filter(count >= min_user_reviews) %>%
+        arrange(desc(count)) %>%
+        mutate(total_count = cumsum(count)) %>% filter(total_count < max_reviews) %>%
+        select(user_id)
+    
+    users_to_consider
+}
+
+# Return a set of (user_id, business_id, rating) data frame
+# Filter data to only the given categories, top num_cities, with users who have written min_user_reviews number of reviews
+construct_review_set <- function(categories, num_cities, min_user_reviews, max_reviews = 100000) {
+    # Use only stars for rating
+    reviews <- dfr[, c('user_id', 'business_id', 'stars')] 
+
+    # Restrict reviews to businesses by cities and categories
+    b1 <- restrict_cities(num_cities)
+    b2 <- restrict_categories(categories)
+    b <- merge(b1, b2, by = 'business_id')
+    reviews_to_consider <- reviews[which(reviews[, 'business_id'] %in% b[ , 'business_id']), ]
+    
+    # Restrict reviews further to users by number of reviews
+    u <- restrict_users(reviews_to_consider, min_user_reviews, max_reviews)
+    reviews_to_consider <- reviews_to_consider[which(reviews_to_consider[, 'user_id'] %in% u[, 'user_id']), ]
+    
+    reviews_to_consider
+}
+
+recommender_results <- function(reviews_to_consider, min_known_ratings, number_runs = 2, algorithms_to_run = c("Random", "Popular", "UBCF", "IBCF", "SVD")) {
+    library(recommenderlab)
+    algorithms <- list("Random" = list(name = "RANDOM", param = NULL),
+                       "Popular" = list(name = "POPULAR", param = NULL),
+                       "UBCF" = list(name = "UBCF", param = list(method = "Cosine", nn = 50, minRating = 1)),
+                       "IBCF" = list(name = "IBCF", param = NULL),
+                       "PCA" = list(name = "PCA", param = NULL),
+                       "SVD" = list(name = "SVD", param = NULL))
+    
+    # Run the above algorithms with cross-validtion
+    r <- as(reviews_to_consider, "realRatingMatrix")
+    scheme <- evaluationScheme(r, method = "cross", k = number_runs, given = min_known_ratings, goodRating = 4)
+    results <- evaluate(scheme, algorithms[algorithms_to_run], n = c(1, 5, 10, 15, 20))
+}
+```
+
+```{r plot_graphs, cache=TRUE, warning=FALSE, echo=FALSE, results='hide', dependson="processing_functions"}
+reviews_to_consider <- construct_review_set(categories = "Restaurants", num_cities = 10, min_user_reviews = 20)
+set.seed(6789)
+num_cv_folds <- 2
+results <- recommender_results(reviews_to_consider, min_known_ratings = 20, number_runs = num_cv_folds)
+
+par(mfrow = c(1, 2))
+plot(results)
+plot(results, "prec/rec")
 ```
     
+Conclusions and future work
+========================================================
+- Predicting best businesses for users is feasible 
+    - We can do better than naive popular algorithm
+- UBCF algorithm performs the best amongst all considered
+- Future work
+    - Improve cold start recommendations (20 ratings required now)
+    - Use more signals than just star ratings 
+    - Use zipcode and radius, rather than city 
+    - Blend different algorithms for best predictions
