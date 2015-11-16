@@ -1,0 +1,57 @@
+Finding the right business, for you!
+========================================================
+author: Sid Reddy
+date: 15 Nov 2015
+
+Finding the right business, for you!
+========================================================
+- Problem: 
+    - Given category and city, find best businesses for a user
+    - Example: Find the best restaurant for a user in a city
+- Naive approach
+    - Recommend popular choices
+    - Cons: Does not take user preferences into account
+- Can we do better?
+
+How can we do better?
+========================================================
+- Take user ratings into consideration
+    - Rating is a single number, can combine several signals
+    - We only use star ratings in our analysis
+- Several algorithms 
+    - User-Based Collaborative Filtering (UBCF)
+    - Item-Based Collaborative Filtering (IBCF)
+    - Singular Value Decomposition (SVD)
+- UBCF performs the best!
+
+How does UBCF work?
+========================================================
+- Leverage users similar to a given user
+    - Similarity is measured using choice of ratings
+- A list of "similar" users for each user is generated
+    - Top 'nn' similar users chosen (nn = 50 in our case)
+    - (or) All users in a certain threshold are considered
+- For a given business:
+    - Ratings of similar users are weighted by similarity
+    - This weighted average is used as rating of given user
+- The businesses are then ranked by these ratings
+    - Considered top 1, 5, 10, 15, 20 recommendations 
+    
+Evaluation
+========================================================
+```{r cache=TRUE, warning=FALSE, echo=FALSE, results='hide'}
+library(jsonlite, quietly = TRUE)
+dataPath <- "yelp_dataset_challenge_academic_dataset"
+
+# Read business file
+dfb <- stream_in(file(paste(dataPath, "yelp_academic_dataset_business.json", sep = '/')), verbose = FALSE)
+
+# Read users file
+dfu <- stream_in(file(paste(dataPath, "yelp_academic_dataset_user.json", sep = '/')), verbose = FALSE)
+
+# Read review file
+dfr <- stream_in(file(paste(dataPath, "yelp_academic_dataset_review.json", sep = '/')), verbose = FALSE)
+
+
+```
+    
