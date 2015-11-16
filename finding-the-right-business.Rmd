@@ -2,7 +2,7 @@
 title: "Finding the right business, for you!"
 author: "Sid Reddy"
 date: "November 8, 2015"
-output: pdf_document
+output: html_document
 ---
 
 ## Introduction
@@ -47,11 +47,13 @@ as.data.frame(dfs)
 ```
 
 We will also make additional simplifying assumptions, primarily to limit the amount of data for processing (the algorithms described below are pretty expensive to run in R). We will restrict our analysis as follows:
-- Limit our analysis to users and businesses that appear in reviews (we will see below that for users who do not appear in reviews, it's hard to generate good recommendations, other than recommending the popular businesses. This is the standard [cold start](https://en.wikipedia.org/wiki/Cold_start) problem that our algorithms below suffer from). 
-- Limit the analysis to the "Restaurants" category, to keep the data size small. 
-- Limit to the first 10 cities, again to keep the data size small.
 
-```{r cache=TRUE, warning=FALSE, echo=FALSE}
+* Limit our analysis to users and businesses that appear in reviews (we will see below that for users who do not appear in reviews, it's hard to generate good recommendations, other than recommending the popular businesses. This is the standard [cold start](https://en.wikipedia.org/wiki/Cold_start) problem that our algorithms below suffer from). 
+* Limit to users who have written a minimum number of reviews, for the same reason as above. When a user has not written a review or has written only a very small number of reviews, the algorithms do not have enough information to make good recommendations. This minimum number is also used to evaluate the predictions of the algorithms (see the min_known_ratings argument to the recommender_results function below). 
+* Limit the analysis to the "Restaurants" category (see the comments for the restrict_categories function in the code snippet below for more details), to keep the data size small. 
+* Limit to the first 10 cities (see the comments for restrict_cities function below), again to keep the data size small.
+
+```{r cache=TRUE, warning=FALSE}
 # Restrict analysis to a small dataset (R has issues handling large number of rows; for example, dcast in reshape2 barfs even for 100K rows)
 
 # Return businesses that fall in the first num_cities 
@@ -113,26 +115,49 @@ construct_review_set <- function(categories, num_cities, min_user_reviews, max_r
     reviews_to_consider
 }
 
-reviews_to_consider <- construct_review_set(categories = "Restaurants", num_cities = 10, min_user_reviews = 10)
+reviews_to_consider <- construct_review_set(categories = "Restaurants", num_cities = 10, min_user_reviews = 20)
+```
+
+A few interesting observations from this exploratory analysis, and the graphs below:
+
+* A large number of users and businesses have few reviews. One user wrote > 500 reviews, and one business got > 200 reviews. 
+* Businesses get more ratings at 4 or 5, than 1 or 2 (probably indicating that people write reviews more often when they like a business).
+
+```{r cache=TRUE, warning=FALSE}
+user_review_count <- reviews_to_consider %>% 
+    group_by(user_id) %>% summarize(count = n()) %>% 
+    select(count)
+business_review_count <- reviews_to_consider %>% 
+    group_by(business_id) %>% summarize(count = n()) %>% 
+    select(count)
+ratings <- reviews_to_consider[, 'stars']
+
+library(ggplot2)
+library(gridExtra)
+plot1 <- ggplot(data = user_review_count, aes(x = count)) +     geom_histogram(binwidth = 1) + xlim(1, max(user_review_count))
+plot2 <- ggplot(data = business_review_count, aes(x = count)) + geom_histogram(binwidth = 1) + xlim(1, max(business_review_count))
+plot3 <- ggplot(reviews_to_consider, aes(user_id, business_id)) + geom_point(aes(colour = factor(stars))) + theme(axis.text = element_blank(), axis.ticks = element_blank()) + scale_colour_manual(values = c("1" = "red", "2" = "red", "3" = "yellow", "4" = "green", "5" = "green"))
+plot4 <- ggplot(data = reviews_to_consider, aes(x = stars)) + geom_histogram(binwidth = 0.25)
+grid.arrange(plot1, plot2, plot3, plot4, nrow = 2, ncol = 2)
 ```
 
 ## Model
 
-We will now construct a simple collaborative filtering model to provide personalized recommendations for users. This will be based on item-item recommendations. Here are the steps involved:
-1. Each user rates a business with a single number. 
-2. We then find the similarity of one business with every other business (using these user ratings). 
-3. When a user now enters a category and a city, we select the businesses that match those criteria. 
-4. For each of these businesses, we compute a score based on the user's ranking of similar businesses (similar businesses are obtained in step 2).
+We will now evaluate several algorithms to provide personalized recommendations for users. We will consider the following models:
 
-We will build a very simple model to begin with: user's star rating for a business is used as the single number. 
+1. Random: Each user rating for a given business is chosen at random. This is a baseline comparison.
+2. Popular: This is the standard average-stars-based algorithm. Businesses with the highest ratings are recommended first.
+3. User-Based Collaborative Filtering (UBCF): Each user is associated with other users based on their rating similarity, and businesses are recommended in order of other similar users' ratings. The complete steps are as follows (the steps are analogous for the IBCF below; a full paper describing these algorithms is [here](https://cran.r-project.org/web/packages/recommenderlab/vignettes/recommenderlab.pdf)):
+    1. Each user rates a business with a single number (this single number could be derived from several signals like star ratings, features extracted from reviews written, upvotes etc. In our analysis, we use only the star ratings for simplicity).  
+    2. We then find the similarity of each user with every other user, using a similarity function like [Cosine](https://en.wikipedia.org/wiki/Cosine_similarity). 
+    3. When we predict a business' relevance to the user, we use the ratings provided by all the other users for that business, and weight it by how similar each user is to the original user. 
+4. Item-Based Collaborative Filtering (IBCF): Each business is associated with other businesses based on their rating similarity, and businesses are recommended based on this user's rating of other similar business. 
+5. Singular Value Decomposition (SVD): This algorithm takes the data as a whole, finds groupings of data, and eliminates lower-significance dimensions. 
 
-1. Removed SVD and PCA and IBCF from consideration, as they have not been good enough for recommendations. 
-2. Default UBCF was not good enough. Needed additional params. 
-3. Need at least 10 reviews per user, before UBCF becomes better. 
+The code below implements all the algorithms. We will find that UBCF works the best. We will provide more detail in the results section below. 
 
-```{r cache=TRUE, warning=FALSE, echo=FALSE}
-
-recommender_results <- function(reviews_to_consider, min_known_ratings, number_runs = 2, algorithms_to_run = c("Random", "Popular", "UBCF")) {
+```{r cache=TRUE, warning=FALSE, message=FALSE}
+recommender_results <- function(reviews_to_consider, min_known_ratings, number_runs = 2, algorithms_to_run = c("Random", "Popular", "UBCF", "IBCF", "SVD")) {
     library(recommenderlab)
     algorithms <- list("Random" = list(name = "RANDOM", param = NULL),
                        "Popular" = list(name = "POPULAR", param = NULL),
@@ -147,5 +172,65 @@ recommender_results <- function(reviews_to_consider, min_known_ratings, number_r
     results <- evaluate(scheme, algorithms[algorithms_to_run], n = c(1, 5, 10, 15, 20))
 }
 
-results <- recommender_results(reviews_to_consider, min_known_ratings = 10, number_runs = 2)
 ```
+
+## Results
+
+We will now present the results from running the algorithms described in the model above. We have limited ourselves to using star ratings only, considered only businesses in the top 10 cities in the Restaurants category, and users who have rated at least 20 businesses. Some notes:
+
+1. User-Based Collaborative Filtering (UBCF) is the best performing of all the algorithms. Note that it dominates all other algorithms in both the TPR vs FPR (True Positive Rate vs False Positive Rate) and Precision/Recall graphs (I have omitted further interpretation of these graphs because of space constraints, see this [paper](https://ccrma.stanford.edu/workshops/mir2009/references/ROCintro.pdf) instead on ROC curves and how they relate to precision/recall graphs).
+    * In general, the Popular algorithm is pretty hard to beat. 
+    * We need at least 20 ratings from a user, before recommendations can be personalized. 
+    * UBCF had to be customized to make it performant. In particular, see the 'nn' (nearest neighbor) and the minRating parameters. 
+2. Cross-validation (4-fold) has been done to limit overfitting (see the number_runs parameter below).
+3. All algorithms fare better than the baseline Random algorithm. 
+4. IBCF and SVD do not outperform the Popular algorithm. The fact that IBCF underperforms indicates that user preferences do matter in recommending businesses. 
+
+```{r cache=TRUE, warning=FALSE, message=FALSE, results='hide'}
+set.seed(6789)
+num_cv_folds <- 2
+results <- recommender_results(reviews_to_consider, min_known_ratings = 20, number_runs = num_cv_folds)
+
+par(mfrow = c(1, 2))
+plot(results)
+plot(results, "prec/rec")
+```
+
+In the graph below, we compare how the UBCF algorithm performs when the number of ratings available per user changes. We note that UBCF performs best when there are at least 20 ratings available for a given user (so the algorithm can "learn" the user's preferences). 
+
+```{r cache=TRUE, warning=FALSE, message=FALSE, results='hide'}
+# Consider UBCF where users did at least 5 ratings
+reviews_to_consider <- construct_review_set(categories = "Restaurants", num_cities = 10, min_user_reviews = 5)
+set.seed(6789)
+results1 <- recommender_results(reviews_to_consider, min_known_ratings = 5, number_runs = num_cv_folds, algorithms_to_run = c("UBCF"))
+
+# Consider UBCF where users did at least 10 ratings
+reviews_to_consider <- construct_review_set(categories = "Restaurants", num_cities = 10, min_user_reviews = 10)
+set.seed(6789)
+results2 <- recommender_results(reviews_to_consider, min_known_ratings = 10, number_runs = num_cv_folds, algorithms_to_run = c("UBCF"))
+
+# Consider UBCF where users did at least 30 ratings
+reviews_to_consider <- construct_review_set(categories = "Restaurants", num_cities = 10, min_user_reviews = 30)
+set.seed(6789)
+results3 <- recommender_results(reviews_to_consider, min_known_ratings = 30, number_runs = num_cv_folds, algorithms_to_run = c("UBCF"))
+
+plot(results$Random, col = 'red', lwd = 2, pch = 1, xlim = c(0, 0.006), ylim = c(0, 0.1), add = FALSE, annotate = 1)
+plot(results$Popular, col = 'blue', axes = FALSE, lwd = 2, pch = 2, add = TRUE, annotate = 1)
+plot(results$UBCF, col = 'green', axes = FALSE, lwd = 2, pch = 3, add = TRUE, annotate = 1)
+plot(results1$UBCF, col = 'orange', axes = FALSE, lwd = 2, pch = 4, add = TRUE, annotate = 1)
+plot(results2$UBCF, col = 'yellow', axes = FALSE, lwd = 2, pch = 5, add = TRUE, annotate = 1)
+plot(results3$UBCF, col = 'dark green', axes = FALSE, lwd = 2, pch = 6, add = TRUE, annotate = 1)
+
+```
+
+## Future Work
+There are several directions for future work in improving the recommendations. 
+
+* We have only used star ratings in this paper. We can enhance it with other signals like the reviews, votes, tips etc. 
+* We can generate recommendations within a given radius of a zipcode, instead of at a city-level. 
+* Different algorithms might work better for different categories/cities. Blending the results appropriately from different algorithms should be explored further. 
+* Investigate algorithms for cold start situations, where a user did not give enough ratings to learn their preferences. 
+
+## Conclusions
+
+We have shown in this paper that recommending the businesses best suited to a given user is feasible from the data set provided. We have shown that the User-Based Collaborative Filtering (UBCF) algorithm performs the best, when users have provided at least 20 other ratings. We have also outlined future directions for work in perfecting recommendations to users. 
