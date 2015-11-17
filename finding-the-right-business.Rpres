@@ -8,6 +8,8 @@ Finding the right business, for you!
 - Problem: 
     - Given category and city, find best businesses for a user
     - Example: Find the best restaurant for a user in a city
+    - Why is this interesting?
+        - Users can find exactly what they want, with minimal time
 - Naive approach
     - Recommend popular choices
     - Cons: Does not take user preferences into account
@@ -18,36 +20,17 @@ How can we do better?
 - Take user ratings into consideration
     - Rating is a single number, can combine several signals
     - We only use star ratings in our analysis
-- Several algorithms 
+- Several algorithms considered for our analysis
+    - Random: Used for baseline comparison
+    - Popular: Rank businesses by average rating 
     - User-Based Collaborative Filtering (UBCF)
-        - Leverage users similar to a given user
         - Generate list of "similar" users (50 in our case)
-        - Business ranked using rating of similar users 
+        - Business ranked using ratings of similar users 
     - Item-Based Collaborative Filtering (IBCF)
     - Singular Value Decomposition (SVD)
-- UBCF performs the best!
-
-How does UBCF work?
-========================================================
-- Leverage users similar to a given user
-    - Similarity is measured using choice of ratings
-- A list of "similar" users for each user is generated
-    - Top 'nn' similar users chosen (nn = 50 in our case)
-    - (or) All users in a certain threshold are considered
-- For a given business:
-    - Ratings of similar users are weighted by similarity
-    - This weighted average is used as rating of given user
-- The businesses are then ranked by these ratings
-    - Considered top 1, 5, 10, 15, 20 recommendations 
     
 Evaluation
 ========================================================
-- Evaluation setup considerations (due to data size)
-    - Restaurants category only
-    - First 10 cities only
-    - Users who gave at least 20 ratings
-    - 4-fold cross validation done for all algorithms
-- UBCF performs the best predictions!
 
 ```{r read_data, cache=TRUE, warning=FALSE, echo=FALSE, results='hide'}
 library(jsonlite, quietly = TRUE)
@@ -141,17 +124,24 @@ recommender_results <- function(reviews_to_consider, min_known_ratings, number_r
 }
 ```
 
-```{r plot_graphs, cache=TRUE, warning=FALSE, echo=FALSE, results='hide', dependson="processing_functions"}
+```{r generate_data, cache=TRUE, warning=FALSE, echo=FALSE, results='hide', dependson="processing_functions"}
 reviews_to_consider <- construct_review_set(categories = "Restaurants", num_cities = 10, min_user_reviews = 20)
 set.seed(6789)
 num_cv_folds <- 2
 results <- recommender_results(reviews_to_consider, min_known_ratings = 20, number_runs = num_cv_folds)
+```
 
+```{r plot_graphs, cache=TRUE, warning=FALSE, echo=FALSE, results='hide', dependson="generate_data", fig.align="center", fig.width=10, fig.height=5}
 par(mfrow = c(1, 2))
-plot(results)
+plot(results, legend = "topleft")
 plot(results, "prec/rec")
 ```
-    
+
+- UBCF performs the best predictions!
+    - Restaurants category only; first 10 cities only
+    - Users who gave at least 20 ratings
+    - 4-fold cross validation done for all algorithms
+
 Conclusions and future work
 ========================================================
 - Predicting best businesses for users is feasible 
